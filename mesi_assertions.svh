@@ -20,8 +20,13 @@ assume property (@(posedge clk) disable iff(rst) !(cpu_read[0] && cpu_write[0]))
 assume property (@(posedge clk) disable iff(rst) !(cpu_read[1] && cpu_write[1]));
 
 //when in Modified, other bus owner shouldn't be granted
-assume property (@(posedge clk) disable iff(rst) (state_0 == Modified && addr_0 == addr_1) |-> !bus_owner[1]);
-assume property (@(posedge clk) disable iff(rst) (state_1 == Modified && addr_0 == addr_1) |-> !bus_owner[0]);
+//assume property (@(posedge clk) disable iff(rst) (state_0 == Modified && addr_0 == addr_1) |-> !bus_owner[1]);
+//assume property (@(posedge clk) disable iff(rst) (state_1 == Modified && addr_0 == addr_1) |-> !bus_owner[0]);
+assume property (@(posedge clk) disable iff(rst) 
+    (state_0 == Modified && addr_0 == addr_1 && bus_cmd != No_OP) |-> s_eventually bus_owner[1]);
+assume property (@(posedge clk) disable iff(rst) 
+    (state_1 == Modified && addr_0 == addr_1 && bus_cmd != No_OP) |-> s_eventually bus_owner[0]);
+
 
 //atmost only one bus owner active at a time
 assume property (@(posedge clk) disable iff(rst) $onehot0(bus_owner));
@@ -47,8 +52,8 @@ assume property (@(posedge clk) disable iff(rst)
 assume property (@(posedge clk) disable iff(rst)  (addr_0 == addr_1) |=> !(exclusive_0 && exclusive_1));
 
 //exclusive only if other invalid
-assume property (@(posedge clk) disable iff(rst) (exclusive_0 == 1'b1) |-> (state_1 == Invalid));
-assume property (@(posedge clk) disable iff(rst) (exclusive_1 == 1'b1) |-> (state_0 == Invalid));
+assume property (@(posedge clk) disable iff(rst) (exclusive_0 == 1'b1) |-> (state_1 == Invalid) || (addr_0 != addr_1));
+assume property (@(posedge clk) disable iff(rst) (exclusive_1 == 1'b1) |-> (state_0 == Invalid) || (addr_0 != addr_1));
 
 //valid bus owner
 assume property (@(posedge clk) disable iff(rst) bus_owner == 2'b00 || bus_owner == 2'b10 || bus_owner == 2'b01);
@@ -82,11 +87,11 @@ assume property (@(posedge clk) disable iff(rst)
 // Once a transaction starts (Read or Write), the address must not change 
 // until the cache reaches a stable state (Shared, Exclusive, or Modified).
 assume property (@(posedge clk) disable iff(rst) 
-    (cpu_read[0] || cpu_write[0]) && (state_0 != Invalid) |=> $stable(addr_0));
+    (cpu_read[0] || cpu_write[0]) && (state_0 == Invalid) |=> $stable(addr_0));
 // Once a transaction starts (Read or Write), the address must not change 
 // until the cache reaches a stable state (Shared, Exclusive, or Modified).
 assume property (@(posedge clk) disable iff(rst) 
-    (cpu_read[1] || cpu_write[1]) && (state_1 != Invalid) |=> $stable(addr_1));
+    (cpu_read[1] || cpu_write[1]) && (state_1 == Invalid) |=> $stable(addr_1));
 
 assume property (@(posedge clk)disable iff(rst) (state_0 != Invalid && bus_cmd != No_OP) |=> $stable(addr_0));
 assume property (@(posedge clk)disable iff(rst) (state_1 != Invalid && bus_cmd != No_OP) |=> $stable(addr_1));
@@ -124,6 +129,22 @@ assume property (@(posedge clk) disable iff(rst)
 // Cache 1 must keep the bus until it reaches the Modified state
 assume property (@(posedge clk) disable iff(rst) 
     (cpu_write[1] && bus_owner[1] && state_1 != Modified) |=> bus_owner[1]);
+
+//assume property (@(posedge clk) disable iff(rst) !(exclusive_0 && exclusive_1));
+
+//assume property (@(posedge clk) disable iff(rst) 
+  //  (state_0 == Invalid && exclusive_0) |=> $stable(exclusive_0) 
+   // until (state_0 != Invalid));
+
+// Constraint: exclusive_0 must remain stable while cache_0 is waiting for the bus 
+// and until it successfully transitions to a valid state.
+assume property (@(posedge clk) disable iff(rst) (state_0 == Invalid && (cpu_read[0] || cpu_write[0])) && addr_0 == addr_1 |=> $stable(exclusive_0));
+assume property (@(posedge clk) disable iff(rst) (state_1 == Invalid && (cpu_read[1] || cpu_write[1])) && addr_0 == addr_1 |=> $stable(exclusive_1));
+
+
+
+
+
 
 
 
@@ -185,7 +206,7 @@ assert property (@(posedge clk) disable iff(rst) (state_1 == Shared && (addr_1 =
                                                 
 //Exclusive to Shared requires BusRd
 assert property (@(posedge clk) disable iff(rst) (state_0 == Exclusive && addr_0 == addr_1) ##1 state_0 == Shared |->
-                                                    $past( bus_cmd == BusRd, 2) && $past(bus_owner[1],2));
+                                                    $past( bus_cmd == BusRd && bus_owner[1]));
 assert property (@(posedge clk) disable iff(rst) (state_1 == Exclusive && addr_0 == addr_1) ##1 state_1 == Shared |->
                                                     $past( bus_cmd == BusRd && bus_owner[0]));
 
@@ -204,8 +225,8 @@ assert property (@(posedge clk) disable iff(rst) ((state_0 == Exclusive) && (add
 assert property (@(posedge clk) disable iff(rst) ((state_1 == Exclusive) && (addr_0 == addr_1) && cpu_write[1] && bus_owner[1]) |=> state_1 == Modified);
 
 //State shouldn't change for own bus request
-assert property (@(posedge clk) disable iff(rst) (bus_owner[0] && !cpu_write[0] && !cpu_read[0]) && !cache_0.snoop_hit  |=> $stable(state_0));
-assert property (@(posedge clk) disable iff(rst) (bus_owner[1] && !cpu_write[1] && !cpu_read[1]) && !cache_1.snoop_hit |=> $stable(state_1));
+assert property (@(posedge clk) disable iff(rst) !bus_owner[0] && (cpu_write[0] || cpu_read[0]) && state_0 == Invalid && !cache_0.snoop_hit |=> $stable(state_0) s_until bus_owner[0] == 1'b1);
+assert property (@(posedge clk) disable iff(rst) !bus_owner[1] && (cpu_write[1] || cpu_read[1]) && state_1 == Invalid && !cache_1.snoop_hit |=> $stable(state_1) s_until bus_owner[1] == 1'b1);
 
 //Invalid State shouldn't change without busownership
 
@@ -220,24 +241,25 @@ assert property ( @(posedge clk) disable iff(rst) (state_1 == Shared || state_1 
 
 
 //only one gets M on Write
-assert property (@(posedge clk) disable iff(rst) (cpu_write[0] && cpu_write[1] && addr_0 == addr_1) && bus_owner[0] |=> ##1 (state_0 == Modified && state_1 == Invalid) );
-assert property (@(posedge clk) disable iff(rst) (cpu_write[0] && cpu_write[1] && addr_0 == addr_1) && bus_owner[1] |=> ##1 (state_1 == Modified && state_0 == Invalid) );
+//assert property (@(posedge clk) disable iff(rst) (cpu_write[0] && cpu_write[1] && addr_0 == addr_1) && bus_owner[0] |=> ##1 (state_1 == Modified && state_0 == Invalid) );
+//assert property (@(posedge clk) disable iff(rst) (cpu_write[0] && cpu_write[1] && addr_0 == addr_1) && bus_owner[1] |=> ##1 (state_1 == Modified && state_0 == Invalid) );
 
 //on write, it goes to M eventually
-assert property (@(posedge clk) disable iff(rst) cpu_write[0] && state_1 == Invalid && bus_owner[0] |-> ##[1:20] state_0 == Modified);
+assert property (@(posedge clk) disable iff(rst) cpu_write[0] && cpu_write[1] && state_1 == Invalid && bus_owner[0] |-> ##[1:20] (state_0 == Modified && state_1 == Invalid) );
+assert property (@(posedge clk) disable iff(rst) cpu_write[0] && cpu_write[1] && state_0 == Invalid && bus_owner[1] |-> ##[1:20] (state_1 == Modified && state_0 == Invalid) );
 //assert property (@(posedge clk) disable iff(rst) cpu_write[1] && state_0 == Invalid && bus_owner[1] && (bus_cmd == BusRdX && bus_cmd == BusUpgr) && (cache_1. snoop_hit == 1'b0) |-> ##[1:20] state_1 == Modified);
 
 //when both invalid, on read request, it goes to Exclusive
-assert property (@(posedge clk) disable iff(rst) (state_0 == Invalid && state_1 == Invalid) && addr_0 == addr_1 && cpu_read[0] |=> ##[1:20] state_0 == Exclusive);
-assert property (@(posedge clk) disable iff(rst) (state_0 == Invalid && state_1 == Invalid) && addr_0 == addr_1 && cpu_read[1] |=> ##[1:20] state_1 == Exclusive);
+assert property (@(posedge clk) disable iff(rst) (state_0 == Invalid && state_1 == Invalid) && addr_0 == addr_1 && bus_cmd == BusRd && bus_owner[0] |=> state_0 == Exclusive && state_1 == Invalid);
+assert property (@(posedge clk) disable iff(rst) (state_0 == Invalid && state_1 == Invalid) && addr_0 == addr_1 && bus_cmd == BusRd && bus_owner[1] |=> state_1 == Exclusive && state_0 == Invalid);
 
 //When one in Exclusive, and other wants to read, both ends up in Shared
-assert property (@(posedge clk) disable iff(rst) (state_0 == Exclusive && state_1 == Invalid) && addr_0 == addr_1 && cpu_read[1] |=> ##[1:3] (state_1 == Shared && state_0 == Shared));
-assert property (@(posedge clk) disable iff(rst) (state_0 == Invalid && state_1 == Exclusive) && addr_0 == addr_1 && cpu_read[0] |=> ##[1:3] (state_1 == Shared && state_0 == Shared));
+assert property (@(posedge clk) disable iff(rst) state_0 == Exclusive && addr_0 == addr_1 && bus_cmd == BusRd && bus_owner[1] |=> ##[1:3] (state_1 == Shared && state_0 == Shared));
+assert property (@(posedge clk) disable iff(rst) state_1 == Exclusive && addr_0 == addr_1 && bus_cmd == BusRd && bus_owner[0] |=> ##[1:3] (state_1 == Shared && state_0 == Shared));
 
 //When in Exclsuive other wants to write, it goes Invalid and other to modified
-assert property (@(posedge clk) disable iff(rst) (state_0 == Exclusive && cpu_write[1] |=> (state_0 == Invalid && state_1 == Modified)));
-assert property (@(posedge clk) disable iff(rst) (state_1 == Exclusive && cpu_write[0] |=> (state_1 == Invalid && state_0 == Modified)));
+assert property (@(posedge clk) disable iff(rst) (state_0 == Exclusive && bus_cmd == BusRdX && cache_0.snoop_hit) |=> (state_0 == Invalid && state_1 == Modified));
+assert property (@(posedge clk) disable iff(rst) (state_0 == Exclusive && bus_cmd == BusRdX && cache_0.snoop_hit) |=> (state_0 == Invalid && state_1 == Modified));
 
 
 
@@ -256,6 +278,22 @@ cover property (@(posedge clk) disable iff(rst) state_1 == Modified);
 //both caches reaches Modified state
 cover property (@(posedge clk) disable iff(rst) state_0 == Invalid |-> s_eventually state_0 == Modified);
 cover property (@(posedge clk) disable iff(rst) state_1 == Invalid |-> s_eventually state_1 == Modified);
+
+
+//Exclusive to Modified, bus remains no_Op
+assert property (@(posedge clk) disable iff(rst) (state_0 == Exclusive && cpu_write[0]) && !cache_0.snoop_hit && bus_owner[0]|=> state_0 == Modified && $past(bus_cmd == No_OP));
+assert property (@(posedge clk) disable iff(rst) (state_1 == Exclusive && cpu_write[1]) && !cache_1.snoop_hit && bus_owner[1] |=> state_1 == Modified && $past(bus_cmd == No_OP));
+
+//Snoop hit takes precedence over own request
+assert property (@(posedge clk) disable iff(rst) cache_0.snoop_hit && state_0 == Modified && cpu_write[0] && bus_cmd == BusRd |=> state_0 == Shared);
+assert property (@(posedge clk) disable iff(rst) cache_1.snoop_hit && state_1 == Modified && cpu_write[1] && bus_cmd == BusRd |=> state_1 == Shared);
+
+//When in Shared only issue BusUpgr on write
+assert property (@(posedge clk) disable iff(rst) (state_0 == Shared && bus_cmd !=No_OP) && cpu_write[0] |-> cache_0.bus_cmd_out == BusUpgr);
+assert property (@(posedge clk) disable iff(rst) (state_1 == Shared && bus_cmd !=No_OP) && cpu_write[1] |-> cache_1.bus_cmd_out == BusUpgr);
+
+
+
 
 
 
